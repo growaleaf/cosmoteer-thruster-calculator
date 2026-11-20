@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Cosmoteer Thruster &amp; Power Budget Calculator</title>
+<style>
+  :root {
+    --bg: #0b0f14;
+    --panel: #121824;
+    --border: #253040;
+    --text: #d7e0ea;
+    --muted: #8a99ac;
+    --accent: #5fb0ff;
+    --good: #5fd98a;
+    --bad: #ff6b6b;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif;
+    padding: 24px;
+    line-height: 1.4;
+  }
+  h1 { font-size: 1.3rem; margin: 0 0 4px; }
+  .subtitle { color: var(--muted); font-size: 0.85rem; margin-bottom: 20px; }
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    font-size: 0.85rem;
+  }
+  th, td {
+    padding: 6px 8px;
+    text-align: right;
+    border-bottom: 1px solid var(--border);
+    white-space: nowrap;
+  }
+  th:first-child, td:first-child { text-align: left; }
+  th { color: var(--muted); font-weight: 600; }
+  input[type="number"] {
+    width: 56px;
+    background: #0b0f14;
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 4px;
+    text-align: right;
+  }
+  .na { color: var(--muted); }
+  #totals {
+    margin-top: 20px;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 16px;
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+    gap: 12px;
+  }
+  .stat-label { color: var(--muted); font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.04em; }
+  .stat-value { font-size: 1.25rem; font-weight: 600; }
+  .stat-value.good { color: var(--good); }
+  .stat-value.bad { color: var(--bad); }
+  #resourceCost { margin-top: 20px; }
+  footer {
+    margin-top: 28px;
+    color: var(--muted);
+    font-size: 0.75rem;
+    border-top: 1px solid var(--border);
+    padding-top: 12px;
+  }
+  .formula-note {
+    color: var(--muted);
+    font-size: 0.75rem;
+    margin-top: 6px;
+  }
+</style>
+</head>
+<body>
+
+<h1>Cosmoteer Thruster &amp; Power Budget Calculator</h1>
+<p class="subtitle">Enter how many of each thruster part your ship carries. Totals update below: mass, thrust, acceleration, power balance, command points and resource cost.</p>
+
+<table id="partsTable">
+  <thead>
+    <tr>
+      <th>Part</th>
+      <th>Count</th>
+      <th>Thrust (kN)</th>
+      <th>Mass (t)</th>
+      <th>Power Use /s</th>
+      <th>Power Gen /s</th>
+      <th>Cmd Pts</th>
+      <th>Resources</th>
+    </tr>
+  </thead>
+  <tbody id="partsBody"></tbody>
+</table>
+
+<div id="totals"></div>
+
+<div id="resourceCost">
+  <div class="stat-label">Total resource cost</div>
+  <table id="resourceTable">
+    <thead><tr><th>Material</th><th>Qty</th></tr></thead>
+    <tbody id="resourceBody"></tbody>
+  </table>
+</div>
+
+<p class="formula-note">
+  Acceleration shown here is a simple total-thrust / total-mass (F / m) figure, assuming all thrusters fire together in one direction.
+  It ignores hull drag, crew staffing, ramp-up time and in-game flight physics, so the actual in-game acceleration may differ.
+</p>
+
+<footer>
+  Part data from <a href="https://cosmoteer.wiki.gg/wiki/Thrusters" style="color:var(--accent)">cosmoteer.wiki.gg</a> (CC BY-SA), via the
+  <a href="https://web.archive.org/web/20250719221019/https://cosmoteer.wiki.gg/wiki/Thrusters" style="color:var(--accent)">Wayback Machine snapshot dated 2025-07-19</a>.
+  The wiki page itself was last edited 2025-02-15. Game values may have changed since. Fields the source page does not list show as "n/a" &mdash; never guessed.
+</footer>
+
+<script src="data.js"></script>
+<script>
+function fmt(n, decimals) {
+  if (n === null || n === undefined || Number.isNaN(n)) return "n/a";
+  return n.toLocaleString(undefined, { maximumFractionDigits: decimals === undefined ? 2 : decimals });
+}
+
+function buildTable() {
+  const body = document.getElementById("partsBody");
+  THRUSTER_PARTS.forEach((part, idx) => {
+    const tr = document.createElement("tr");
+    const resourcesText = part.resources.map(r => `${r.material} x${r.qty}`).join(", ");
+    tr.innerHTML = `
+      <td>${part.name}</td>
+      <td><input type="number" min="0" step="1" value="0" data-idx="${idx}" class="count-input"></td>
+      <td>${fmt(part.thrustKN, 0)}</td>
+      <td>${fmt(part.massT, 2)}</td>
+      <td>${fmt(part.powerUsePerSec, 3)}</td>
+      <td class="${part.powerGenPerSec === null ? 'na' : ''}">${fmt(part.powerGenPerSec, 3)}</td>
+      <td>${fmt(part.commandPoints, 0)}</td>
+      <td>${resourcesText}</td>
+    `;
+    body.appendChild(tr);
+  });
+  document.querySelectorAll(".count-input").forEach(el => el.addEventListener("input", recalc));
+}
+
+function recalc() {
+  const counts = Array(THRUSTER_PARTS.length).fill(0);
+  document.querySelectorAll(".count-input").forEach(el => {
+    const idx = Number(el.dataset.idx);
+    const v = parseInt(el.value, 10);
+    counts[idx] = Number.isFinite(v) && v >= 0 ? v : 0;
+  });
+
+  let totalMass = 0, totalThrust = 0, totalPowerUse = 0, totalPowerGen = 0, totalCmdPts = 0, totalValue = 0;
+  let powerGenHasData = false;
+  const resourceTotals = {};
+
+  THRUSTER_PARTS.forEach((part, idx) => {
+    const n = counts[idx];
+    if (n === 0) return;
+    totalMass += part.massT * n;
+    totalThrust += part.thrustKN * n;
+    totalPowerUse += part.powerUsePerSec * n;
+    totalCmdPts += part.commandPoints * n;
+    if (part.value !== null) totalValue += part.value * n;
+    if (part.powerGenPerSec !== null) {
+      totalPowerGen += part.powerGenPerSec * n;
+      powerGenHasData = true;
+    }
+    part.resources.forEach(r => {
+      resourceTotals[r.material] = (resourceTotals[r.material] || 0) + r.qty * n;
+    });
+  });
+
+  const accel = totalMass > 0 ? totalThrust / totalMass : null;
+  const powerBalance = powerGenHasData ? (totalPowerGen - totalPowerUse) : null;
+
+  const totalsDiv = document.getElementById("totals");
+  totalsDiv.innerHTML = `
+    ${statBlock("Total Mass", fmt(totalMass, 2) + " t")}
+    ${statBlock("Total Thrust", fmt(totalThrust, 0) + " kN")}
+    ${statBlock("Acceleration (F/m)", accel === null ? "n/a" : fmt(accel, 2) + " kN/t")}
+    ${statBlock("Power Use", fmt(totalPowerUse, 3) + " /sec")}
+    ${statBlock("Power Generation", powerGenHasData ? fmt(totalPowerGen, 3) + " /sec" : "n/a")}
+    ${statBlock("Power Balance", powerBalance === null ? "n/a" : fmt(powerBalance, 3) + " /sec", powerBalance === null ? "" : (powerBalance >= 0 ? "good" : "bad"))}
+    ${statBlock("Command Points", fmt(totalCmdPts, 0))}
+    ${statBlock("Resource Value", fmt(totalValue, 0))}
+  `;
+
+  const resourceBody = document.getElementById("resourceBody");
+  resourceBody.innerHTML = "";
+  const names = Object.keys(resourceTotals).sort();
+  if (names.length === 0) {
+    resourceBody.innerHTML = `<tr><td colspan="2" class="na">no parts selected</td></tr>`;
+  } else {
+    names.forEach(name => {
+      const tr = document.createElement("tr");
+      tr.innerHTML = `<td>${name}</td><td>${fmt(resourceTotals[name], 0)}</td>`;
+      resourceBody.appendChild(tr);
+    });
+  }
+}
+
+function statBlock(label, value, cls) {
+  return `<div><div class="stat-label">${label}</div><div class="stat-value ${cls || ''}">${value}</div></div>`;
+}
+
+buildTable();
+recalc();
+</script>
+</body>
+</html>
